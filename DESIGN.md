@@ -603,12 +603,113 @@ Parent (first_name, last_name, phone, email, preferred_channel, internal_notes)
 
 This separation also simplifies deduplication (matching incoming calls/SMS to an existing parent) and enables family-level analytics (lifetime value per household, sibling conversion rates).
 
+### Operator overrides and extraction quality feedback
+
+The NBA system depends on accurate LLM extraction — `detected_intent`, `sentiment`, `financial_concern_level`, etc. directly determine the context bucket, which determines the RL state, which determines the recommended action. If the LLM misclassifies any of those, the entire chain operates on a wrong state. Today, there is no mechanism to detect or correct this.
+
+**Operator override flow**: Add a lightweight "this doesn't seem right" affordance to the NBA banner. When clicked, the operator selects what's wrong from a short list (e.g., "no financial concern," "they're not declining," "wrong channel suggestion"). This creates an `OperatorOverride` record:
+
+```
+OperatorOverride
+  - nba_decision_id (FK)
+  - override_type: "context_correction" | "action_rejection" | "timing_rejection"
+  - operator_note: free text (optional)
+  - created_at
+```
+
+**How overrides feed back into the system**:
+
+1. **Immediate re-routing**: On override, recompute the NBA with corrected inputs. If the operator says "no financial concern," zero out `financial_concern_level`, re-encode the state, and re-run `select_action`. The operator instantly gets a better suggestion.
+
+2. **Negative RL reward**: An override is a strong signal that the recommended action was wrong. Feed a negative reward (e.g., `-0.3`) into the Q-table for the `(state, action)` pair. Over time, this teaches the model to avoid actions that operators consistently reject.
+
+3. **Extraction quality monitoring**: Aggregate overrides by `override_type` and context bucket. If 40% of leads in the `financial_concern` bucket get overridden with "no financial concern," the extraction prompt needs tuning for that category. This gives a quantitative signal for prompt engineering without requiring a separate labeling effort.
+
+4. **Implicit adoption signal**: Even without explicit overrides, track whether the operator followed the recommendation (did they actually call when the NBA said "call"?). Low adoption rates for a specific action in a specific state indicate either a bad action or a misclassified state — both worth investigating.
+
+**Consistency checks**: As a supplement to operator feedback, add automated heuristics that flag suspicious extractions — e.g., sentiment flipping from `positive` to `negative` between two SMS messages 30 seconds apart, or `financial_concern: high` when no money-related keywords appear in the transcript. Flagged extractions can be queued for operator review or re-extracted with the full conversation as context.
+
+**Extraction prompt priors (closing the loop)**: Operator corrections shouldn't just fix the current NBA — they should prevent the LLM from making the same mistake on the next interaction with the same lead. The mechanism: accumulate confirmed corrections into a short, character-limited addendum that gets injected into the extraction prompt's CONTEXT block.
+
+For example, if an operator overrides "no financial concern" twice for the same lead, the system builds a prior like:
+
+```
+OPERATOR-CONFIRMED PRIORS (do not contradict unless transcript is unambiguous):
+- This parent has NO financial concerns (confirmed 2x by operator)
+```
+
+This gets appended to the existing CONTEXT section of `EXTRACTION_PROMPT`, between the lead metadata and the transcript. The LLM now has explicit guidance to not hallucinate financial signals for this lead.
+
+Implementation:
+
+1. **Storage**: Add an `extraction_priors` text field on the `Lead` model. This is a plain-text string, max 500 characters, built automatically from `OperatorOverride` records. The character limit prevents prompt bloat — each prior is one line, oldest priors get evicted when the limit is reached.
+
+2. **Prior generation**: A helper function aggregates overrides for a lead into natural-language priors:
+   - `context_correction` with note "no financial concern" (2x) → `"This parent has NO financial concerns (confirmed 2x)"`
+   - `context_correction` with note "not declining" (1x) → `"Parent is not declining — previous negative sentiment was misread"`
+   - Only corrections with 2+ occurrences (or operator-marked "strong confidence") get promoted to priors, reducing noise from one-off mistakes.
+
+3. **Injection**: In `extract_from_interaction`, if `lead.extraction_priors` is non-empty, insert it into the prompt:
+   ```
+   CONTEXT:
+   - Lead: Sarah Johnson (parent/guardian)
+   - Child: Emma, age 12
+   ...
+
+   OPERATOR-CONFIRMED PRIORS (do not contradict unless transcript is unambiguous):
+   - This parent has NO financial concerns (confirmed 2x)
+   - Parent prefers weekday evening calls (confirmed 1x)
+
+   TRANSCRIPT:
+   ...
+   ```
+
+4. **Decay**: Priors older than 90 days get removed automatically — a parent's financial situation can change, and stale priors become misleading. The character limit also naturally evicts old priors as new ones accumulate.
+
+This creates a tight feedback loop: operator corrects → prior saved → next extraction is guided → fewer corrections needed → the system self-improves per lead without any model retraining.
+
+**Global prompt refinement from aggregate misclassifications**: The per-lead priors fix individual leads, but they don't fix the underlying extraction prompt. A complementary approach: use the misclassification data itself to evolve the prompt globally.
+
+Weekly (or on-demand), a batch job:
+
+1. **Collects** all `OperatorOverride` records from the past week across all leads, grouped by `override_type`.
+2. **Feeds them to the LLM** with the original transcripts and extractions that were overridden. The meta-prompt asks: "Here are N cases where the extraction was wrong. For each, here's the transcript, what the model extracted, and what the operator corrected. Identify recurring patterns — why is the model making these mistakes? What trends should the extraction prompt warn about?"
+3. **The LLM reasons about patterns**, e.g.:
+   - "The model flags `financial_concern: high` whenever a parent mentions 'scholarship' — but in 6/8 cases the parent was just asking about merit awards, not expressing cost concerns."
+   - "Short SMS responses like 'ok sounds good' are being classified as `sentiment: positive, intent: interested` when they're often just acknowledgments with no real buying signal."
+4. **Generates a character-limited addendum** (e.g., 300 chars) of "watch-outs" — specific, actionable instructions derived from real failure patterns:
+   ```
+   EXTRACTION WATCH-OUTS (derived from recent operator corrections):
+   - "Scholarship" mentions are often about merit, not financial hardship — only flag financial_concern if the parent explicitly mentions cost, budget, or inability to pay.
+   - Brief SMS acknowledgments ("ok", "sounds good", "thanks") are neutral, not positive-interested. Reserve positive/interested for messages that express enthusiasm or ask follow-up questions.
+   ```
+5. **This addendum is appended globally** to `EXTRACTION_PROMPT` for all leads, not just the ones that were corrected. It catches the same class of error on new leads the model hasn't seen yet.
+
+This is essentially **automated prompt engineering** — the system identifies its own systematic errors and writes its own corrective instructions. The character limit keeps it from growing unbounded, and the weekly cadence means stale watch-outs (from a previous model version or seasonal pattern) naturally rotate out.
+
+**Persisting and evolving the addendum**: The generated watch-outs are stored in a versioned `PromptAddendum` table:
+
+```
+PromptAddendum
+  - id
+  - version: int (auto-incrementing)
+  - content: text (the watch-out addendum, character-limited)
+  - source_override_count: int (how many overrides informed this version)
+  - created_at
+  - active: bool
+```
+
+Each week's batch job receives **both** the new week's overrides **and** the previous active addendum as input. The meta-prompt becomes: "Here is the current set of watch-outs from previous weeks. Here are this week's new misclassifications. Update the watch-outs: keep rules that are still relevant, refine rules that are partially working, drop rules that no longer appear in the error data, and add new rules for newly observed patterns." This preserves institutional memory — a pattern caught in week 1 doesn't disappear in week 2 just because it didn't recur (it might not recur *because* the watch-out is working). The character limit forces the LLM to prioritize: as new patterns emerge, low-impact or resolved watch-outs get naturally evicted.
+
+The version history also enables rollback — if a new addendum degrades extraction quality (detectable via a spike in operator overrides the following week), revert to the previous version.
+
+The two mechanisms are complementary: **per-lead priors** handle idiosyncratic corrections ("this specific parent has no financial concerns"), while **global watch-outs** handle systematic extraction biases ("the model over-triggers on the word 'scholarship'").
+
 ### Other improvements
 
 1. **Outcome tracking dashboard**: Visualize Q-value evolution, reward distribution, and state transition patterns to monitor RL health
-2. **Operator overrides**: Let operators reject an NBA with a reason; feed rejections back as negative reward
-3. **A/B testing framework**: Run the seeded Q-table vs. a learning Q-table side by side and compare conversion rates
-4. **Feature-based state representation**: Replace discrete buckets with continuous feature vectors for richer state encoding (requires function approximation — linear or shallow neural net)
-5. **Multi-step action plans**: Instead of one action, produce a planned sequence (e.g., "SMS now, call in 24h, check-in in 72h") with a learned policy over the sequence
-6. **Real OpenAI integration testing**: Validate extraction quality and RL advisor prompts across diverse transcript samples
-7. **Test suite**: Unit tests for state encoding, Q-updates, action filtering, and brief generation. Integration tests for the full pipeline.
+2. **A/B testing framework**: Run the seeded Q-table vs. a learning Q-table side by side and compare conversion rates
+3. **Feature-based state representation**: Replace discrete buckets with continuous feature vectors for richer state encoding (requires function approximation — linear or shallow neural net)
+4. **Multi-step action plans**: Instead of one action, produce a planned sequence (e.g., "SMS now, call in 24h, check-in in 72h") with a learned policy over the sequence
+5. **Real OpenAI integration testing**: Validate extraction quality and RL advisor prompts across diverse transcript samples
+6. **Test suite**: Unit tests for state encoding, Q-updates, action filtering, and brief generation. Integration tests for the full pipeline.
