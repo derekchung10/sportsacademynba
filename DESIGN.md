@@ -559,6 +559,50 @@ The current system updates the Q-table synchronously inside `process_interaction
 
 **Migration path**: The current `StateTransition` table already logs everything the batch job needs. The change is purely about *when* `update_q_table` runs — moving it from inline to a scheduled job. The `QValue` table structure stays the same. This is a configuration change, not an architectural one.
 
+### RL state granularity: action vs. attributes
+
+The current RL state is `(lead_status, context_bucket)` — roughly 90 discrete states. The reward signal is based solely on **lead status transitions** (did the lead move forward or backward in the funnel). This means the model can learn *which semantic action* works best in a given state, but it **cannot distinguish why an otherwise correct action failed**.
+
+For example, if the system recommends "call the parent" (correct action) but suggests Saturday morning (wrong time) and the parent doesn't answer, the outcome is a stall (`-0.02` penalty). The model penalizes `scheduling_push` in that state, even though the action was right — only the timing was wrong.
+
+**What's missing from the state**: time of day, day of week, days since last contact, number of prior attempts, channel history. These features are used heuristically in the action brief (e.g., `_analyze_response_timing` suggests optimal call times based on past response patterns), but they don't feed back into the RL loop.
+
+**Production approaches to fix this**:
+
+1. **Richer state space**: Encode time-related features into the state, e.g., `"interested:scheduling_intent:evening"`. The Q-table then learns that `scheduling_push` works better in the evening variant than the morning variant.
+2. **Composite action space**: Instead of just `scheduling_push`, make the action a tuple `(scheduling_push, call, evening)`. Q-values are learned per action-channel-time combination.
+3. **Shaped rewards**: Add intermediate signals beyond status transitions — did they answer the call (+0.05)? Did the conversation last >2 minutes (+0.1)? These partial rewards let the model distinguish "right action, wrong execution" from "wrong action."
+4. **Contextual bandits / function approximation**: Replace the tabular Q-table with a model that takes continuous features (time of day, days since last contact, historical response pattern) as input. This generalizes across timing without needing to discretize every dimension.
+
+The current design is intentionally simple for a take-home scope. The `StateTransition` audit log captures enough data to retroactively train a richer model if needed.
+
+### Multi-child families
+
+The current data model assumes **one Lead = one parent + one child**. The `Lead` table has a single `child_name`, `child_age`, and `sport` field. If a family has two children interested in different programs, the workaround today is two separate Lead records for the same parent — same phone number, two leads.
+
+This creates problems at scale:
+
+- **Duplicate conversations**: SMS replies from the parent land on one lead arbitrarily, fragmenting the conversation.
+- **No shared context**: A positive experience enrolling one child doesn't inform outreach for the sibling.
+- **Operator confusion**: The same parent name appears twice in the list with no indication they're related.
+
+The LLM extraction does detect siblings via `family_context.siblings` and stores them as context artifacts. The RL engine uses `has_siblings` to unlock the `family_engage` action. But this is a conversation hint, not a structural relationship.
+
+**Production data model**:
+
+```
+Parent (first_name, last_name, phone, email, preferred_channel, internal_notes)
+  └── Child 1 (name, age, sport, enrollment_status)
+  └── Child 2 (name, age, sport, enrollment_status)
+```
+
+- **Parent** is the contact entity — one phone number, one conversation thread, one operator relationship.
+- **Child** is the enrollment entity — each has their own funnel status (`new` → `enrolled` → `active`).
+- **Interactions** link to the parent; context artifacts can optionally link to a specific child.
+- **NBA reasoning** spans all children: "Emma is already enrolled and loves the program — use that as social proof when discussing Jake's trial."
+
+This separation also simplifies deduplication (matching incoming calls/SMS to an existing parent) and enables family-level analytics (lifetime value per household, sibling conversion rates).
+
 ### Other improvements
 
 1. **Outcome tracking dashboard**: Visualize Q-value evolution, reward distribution, and state transition patterns to monitor RL health
