@@ -116,9 +116,9 @@ export default function ConversationList({
                     {lead.first_name} {lead.last_name}
                   </span>
                   <div className="flex items-center gap-1.5 flex-shrink-0 ml-2 group-hover:hidden">
-                    {lead.nba_priority && lead.nba_priority !== 'low' && (
+                    {lead.nba_priority && (
                       <span className={`text-[9px] font-semibold px-1 py-px rounded ${priorityBadge(lead.nba_priority)}`}>
-                        {lead.nba_priority === 'urgent' ? 'URGENT' : lead.nba_priority === 'high' ? 'HIGH' : 'MED'}
+                        {lead.nba_priority === 'urgent' ? 'URGENT' : lead.nba_priority === 'high' ? 'HIGH' : lead.nba_priority === 'normal' ? 'MED' : 'LOW'}
                       </span>
                     )}
                     <span className="text-[10px] text-gray-400">
@@ -200,8 +200,9 @@ function priorityBadge(priority) {
     urgent: 'bg-red-100 text-red-700',
     high: 'bg-orange-100 text-orange-700',
     normal: 'bg-blue-50 text-blue-600',
+    low: 'bg-gray-100 text-gray-500',
   };
-  return map[priority] || '';
+  return map[priority] || 'bg-gray-100 text-gray-500';
 }
 
 function SortRecentIcon({ className }) {

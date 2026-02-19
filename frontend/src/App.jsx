@@ -80,6 +80,9 @@ export default function App() {
     (category) => {
       setSelectedCategory(category);
       try { sessionStorage.setItem('category', category); } catch {}
+      setSelectedLead(null);
+      selectedLeadIdRef.current = null;
+      try { sessionStorage.removeItem('selectedLeadId'); } catch {}
       loadLeads(searchQuery, category, selectedStatus, sortBy);
     },
     [selectedStatus, searchQuery, sortBy, loadLeads]

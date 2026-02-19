@@ -68,19 +68,24 @@ class LeadListCreateView(APIView):
         queryset = Lead.objects.all()
 
         # ─── Category filter (operator-facing buckets) ─────────────────
+        # Priority: attending > inbox > awaiting_reply > archive
+        # "Attending" leads (status=active) always go to attending,
+        # even if they have a pending scheduled action.
         category = request.query_params.get("category")
         if category == "archive":
             queryset = queryset.filter(is_archived=True)
+        elif category == "attending":
+            queryset = queryset.filter(status__in=ATTENDING_STATUSES, is_archived=False)
         elif category == "inbox":
             inbox_ids = _inbox_lead_ids()
-            queryset = queryset.filter(id__in=inbox_ids, is_archived=False)
+            queryset = queryset.filter(
+                id__in=inbox_ids, is_archived=False
+            ).exclude(status__in=ATTENDING_STATUSES)
         elif category == "awaiting_reply":
             inbox_ids = _inbox_lead_ids()
             queryset = queryset.filter(is_archived=False).exclude(
                 status__in=ATTENDING_STATUSES
             ).exclude(id__in=inbox_ids)
-        elif category == "attending":
-            queryset = queryset.filter(status__in=ATTENDING_STATUSES, is_archived=False)
 
         # ─── Status filter (still available for power users) ───────────
         status_filter = request.query_params.get("status")
@@ -194,10 +199,12 @@ class LeadStatsView(APIView):
         inbox_ids = _inbox_lead_ids()
         active_leads = Lead.objects.filter(is_archived=False)
 
-        inbox_count = active_leads.filter(id__in=inbox_ids).count()
         attending_count = active_leads.filter(
             status__in=ATTENDING_STATUSES
-        ).exclude(id__in=inbox_ids).count()
+        ).count()
+        inbox_count = active_leads.filter(
+            id__in=inbox_ids
+        ).exclude(status__in=ATTENDING_STATUSES).count()
         archive_count = Lead.objects.filter(is_archived=True).count()
         awaiting_reply_count = (
             active_leads
