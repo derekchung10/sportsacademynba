@@ -26,6 +26,7 @@ class ContextArtifact(models.Model):
     #             lead_profile_update, conversation_notes
     # Enriched types (Option D): financial_signals, scheduling_constraints,
     #                             family_context, objections
+    # Open-ended: additional_signals (LLM-detected signals outside the fixed schema)
 
     # The actual content
     content = models.TextField()  # JSON or plain text depending on type

@@ -4,11 +4,12 @@ from django.db import models
 
 class NBADecision(models.Model):
     """
-    Next Best Action decision — produced after each interaction completes.
+    Next Best Action decision — produced by the graph RL engine after each
+    interaction completes.
 
-    Design: NBA is deterministic (rule-based policy), not LLM-generated.
-    This ensures: same inputs → same outputs, testable, auditable.
-    The LLM provides the *context* (summaries, intent); rules provide the *decision*.
+    Strategy comes from Q-learning (which semantic action to take).
+    Tactics come from the action brief builder (what to say, tone, prep).
+    Same Q-table + same state = same output (deterministic, auditable).
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -17,28 +18,36 @@ class NBADecision(models.Model):
         "Interaction", on_delete=models.SET_NULL, null=True, blank=True, related_name="nba_decisions"
     )
 
-    # The decision
+    # The decision (semantic action name)
     action = models.CharField(max_length=50)
-    # Actions: call, sms, email, wait, schedule_visit, escalate_to_human, no_action
-    channel = models.CharField(max_length=20, null=True, blank=True)  # voice, sms, email
-    priority = models.CharField(max_length=20, default="normal")  # low, normal, high, urgent
+    channel = models.CharField(max_length=20, null=True, blank=True)
+    priority = models.CharField(max_length=20, default="normal")
 
     # Scheduling
     scheduled_for = models.DateTimeField(null=True, blank=True)
 
-    # Reasoning (human-readable explanation of why this action was chosen)
+    # Reasoning (timing rationale from the action brief)
     reasoning = models.TextField()
 
-    # Policy inputs snapshot — what data the rules evaluated (for reproducibility)
+    # Policy inputs snapshot (for reproducibility)
     policy_inputs = models.JSONField(default=dict, blank=True)
 
-    # Rule that fired
+    # Rule/action identifier (e.g., "rl:scholarship_outreach")
     rule_name = models.CharField(max_length=100, null=True, blank=True)
+
+    # Full action brief: content directives, tone, prep, avoids, message draft
+    action_brief = models.JSONField(default=dict, blank=True)
+
+    # Signal context snapshot for outcome tracking
+    signal_scores = models.JSONField(default=dict, blank=True)
+
+    # RL state and Q-value that produced this decision
+    rl_state = models.CharField(max_length=100, null=True, blank=True)
+    rl_q_value = models.FloatField(null=True, blank=True)
 
     # State
     is_current = models.BooleanField(default=True, db_index=True)
     status = models.CharField(max_length=30, default="pending")
-    # Statuses: pending, executing, completed, superseded, cancelled
 
     created_at = models.DateTimeField(auto_now_add=True)
     executed_at = models.DateTimeField(null=True, blank=True)

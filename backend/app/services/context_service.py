@@ -105,6 +105,14 @@ def enrich_from_extraction(lead_id, interaction_id, extraction: LLMExtractionRes
         )
         artifacts.append(artifact)
 
+    # Additional signals — open-ended signals outside the fixed schema
+    if extraction.additional_signals:
+        artifact = _create_artifact(
+            lead_id, interaction_id, "additional_signals",
+            json.dumps(extraction.additional_signals)
+        )
+        artifacts.append(artifact)
+
     return artifacts
 
 
@@ -206,6 +214,9 @@ def assemble_context_pack(lead_id) -> dict:
     # Objections — collect all, deduplicate by topic, keep highest severity
     objections = _accumulate_objections(lead_id)
 
+    # Additional signals — open-ended signals outside the fixed schema
+    additional_signals = _accumulate_additional_signals(lead_id)
+
     # Recent interactions
     recent_interactions = (
         Interaction.objects
@@ -258,6 +269,7 @@ def assemble_context_pack(lead_id) -> dict:
         "scheduling_constraints": scheduling_constraints,
         "family_context": family_context,
         "objections": objections,
+        "additional_signals": additional_signals,
         "recent_interactions": recent_list,
         "current_nba": nba_dict,
         "assembled_at": utcnow().isoformat(),
@@ -363,3 +375,31 @@ def _accumulate_objections(lead_id) -> list:
         except (json.JSONDecodeError, TypeError):
             pass
     return list(objections_by_topic.values())
+
+
+URGENCY_ORDER = {"low": 0, "moderate": 1, "high": 2}
+
+
+def _accumulate_additional_signals(lead_id) -> list:
+    """
+    Collect open-ended signals across all interactions.
+    Deduplicate by signal label, keeping the highest urgency for each.
+    """
+    artifacts = (
+        ContextArtifact.objects
+        .filter(lead_id=lead_id, artifact_type="additional_signals")
+        .order_by("created_at")
+    )
+    signals_by_label = {}
+    for a in artifacts:
+        try:
+            data = json.loads(a.content)
+            for sig in data:
+                label = sig.get("signal", "unknown")
+                urgency = sig.get("urgency", "low")
+                existing = signals_by_label.get(label)
+                if not existing or URGENCY_ORDER.get(urgency, 0) > URGENCY_ORDER.get(existing.get("urgency", "low"), 0):
+                    signals_by_label[label] = sig
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return list(signals_by_label.values())

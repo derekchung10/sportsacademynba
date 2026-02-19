@@ -93,7 +93,9 @@ class NBADecisionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'lead_id', 'interaction_id', 'action', 'channel',
             'priority', 'scheduled_for', 'reasoning', 'policy_inputs',
-            'rule_name', 'is_current', 'status', 'created_at', 'executed_at',
+            'rule_name', 'action_brief', 'signal_scores',
+            'rl_state', 'rl_q_value',
+            'is_current', 'status', 'created_at', 'executed_at',
         ]
 
 

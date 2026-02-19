@@ -2,17 +2,16 @@
 Interaction Processing Pipeline
 
 This is the core orchestrator. When an interaction is submitted:
-1. Persist the interaction record
-2. Log an event
-3. Run LLM extraction (summary, facts, intent, sentiment)
-4. Persist context artifacts
-5. Update lead state (status, counters)
-6. Run NBA engine to produce next best action
+1. Log an event
+2. Run LLM extraction (summary, facts, intent, sentiment)
+3. Persist context artifacts
+4. Update lead state (status, counters)
+5. Q-table update: reward the previous action based on the state transition
+6. Run RL-based NBA engine to produce next best action (with full action brief)
 7. Log the NBA decision event
-8. (If scheduled) create a scheduled action
 
 Design choice: Synchronous pipeline (not event-driven) for simplicity.
-In production, steps 3+ could be async (background job/queue) to avoid
+In production, steps 2+ could be async (background job/queue) to avoid
 blocking the API response. For this demo, sync is fine and more inspectable.
 """
 import logging
@@ -23,9 +22,11 @@ from django.db import transaction
 from app.models.lead import Lead
 from app.models.interaction import Interaction
 from app.models.event import Event
+from app.models.nba_decision import NBADecision
 from app.services.llm_service import extract_from_interaction
 from app.services.context_service import enrich_from_extraction
 from app.services.nba_engine import compute_nba, persist_nba_decision
+from app.services.rl_engine import encode_state, update_q_table
 from app.utils import build_child_info
 
 logger = logging.getLogger(__name__)
@@ -136,11 +137,16 @@ def process_interaction(interaction: Interaction) -> dict:
 
         lead.save()
 
-        # ─── Step 5: Compute NBA ─────────────────────────────────────────
-        nba_result, policy_inputs = compute_nba(lead, interaction)
+        # ─── Step 5: Q-table update (reward previous action) ─────────────
+        _update_q_table_from_transition(lead, old_status, new_status, results)
 
-        decision = persist_nba_decision(lead, nba_result, str(interaction.id), policy_inputs)
-        results["steps"].append(f"nba_produced ({nba_result.action}/{nba_result.channel})")
+        # ─── Step 6: Compute NBA via RL engine ───────────────────────────
+        action_brief, policy_inputs = compute_nba(lead, interaction)
+
+        decision = persist_nba_decision(lead, action_brief, str(interaction.id), policy_inputs)
+        results["steps"].append(
+            f"nba_produced ({action_brief.semantic_action}/{action_brief.channel})"
+        )
 
         # Log NBA event
         Event.objects.create(
@@ -149,15 +155,16 @@ def process_interaction(interaction: Interaction) -> dict:
             source="system",
             source_id=str(decision.id),
             payload={
-                "action": nba_result.action,
-                "channel": nba_result.channel,
-                "priority": nba_result.priority,
-                "rule_name": nba_result.rule_name,
-                "scheduled_for": nba_result.scheduled_for.isoformat() if nba_result.scheduled_for else None,
+                "action": action_brief.semantic_action,
+                "channel": action_brief.channel,
+                "priority": action_brief.priority,
+                "rl_state": action_brief.state,
+                "rl_q_value": action_brief.q_value,
+                "scheduled_for": action_brief.scheduled_for.isoformat() if action_brief.scheduled_for else None,
             },
             description=(
-                f"NBA: {nba_result.action} via {nba_result.channel or 'N/A'} "
-                f"(priority={nba_result.priority}, rule={nba_result.rule_name})"
+                f"NBA: {action_brief.semantic_action} via {action_brief.channel or 'N/A'} "
+                f"(priority={action_brief.priority}, state={action_brief.state}, q={action_brief.q_value:.3f})"
             ),
         )
 
@@ -252,3 +259,45 @@ def _derive_retention_status(current_status: str, intent: str, interaction_statu
         return current_status
 
     return current_status
+
+
+# ─── RL Q-Table Update ───────────────────────────────────────────────────────
+
+def _update_q_table_from_transition(lead, old_status, new_status, results):
+    """
+    After a status change, reward or penalize the previous NBA decision's action.
+    This is the learning step of the RL engine.
+    """
+    previous_decision = (
+        NBADecision.objects
+        .filter(lead_id=lead.id, is_current=True)
+        .first()
+    )
+    if not previous_decision or not previous_decision.rl_state:
+        return
+
+    state_before = previous_decision.rl_state
+    action_taken = previous_decision.action
+
+    # Build state_after: replace the status part of the state string.
+    # The context bucket may have changed too, but we approximate with the same
+    # bucket here — the full recomputation happens in compute_nba.
+    state_parts = state_before.split(":")
+    context_bucket = state_parts[1] if len(state_parts) > 1 else "neutral"
+    state_after = f"{new_status}:{context_bucket}"
+
+    transition = update_q_table(
+        lead_id=lead.id,
+        nba_decision_id=previous_decision.id,
+        state_before=state_before,
+        action_taken=action_taken,
+        state_after=state_after,
+        status_before=old_status,
+        status_after=new_status,
+    )
+
+    if transition:
+        results["steps"].append(
+            f"q_update (r={transition.reward:+.2f}, "
+            f"Q={transition.q_value_before:.3f}->{transition.q_value_after:.3f})"
+        )

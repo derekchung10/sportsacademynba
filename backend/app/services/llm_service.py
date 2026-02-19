@@ -35,6 +35,7 @@ class LLMExtractionResult:
         scheduling_constraints: dict | None = None,
         family_context: dict | None = None,
         objections: list[dict] | None = None,
+        additional_signals: list[dict] | None = None,
     ):
         self.summary = summary
         self.facts = facts
@@ -46,6 +47,8 @@ class LLMExtractionResult:
         self.scheduling_constraints = scheduling_constraints or {"constraints": [], "preferred_times": []}
         self.family_context = family_context or {"siblings": [], "decision_makers": [], "notes": []}
         self.objections = objections or []
+        # Open-ended signals the LLM detected outside the fixed schema
+        self.additional_signals = additional_signals or []
 
 
 EXTRACTION_PROMPT = """You are an AI assistant for a sports academy outreach system.
@@ -85,6 +88,9 @@ Respond with ONLY valid JSON in this exact format:
   }},
   "objections": [
     {{"topic": "e.g. cost, distance, time, injury concern", "detail": "specific concern", "severity": "one of: low, moderate, high"}}
+  ],
+  "additional_signals": [
+    {{"signal": "short label", "detail": "what was said or implied", "suggested_action": "what a thoughtful human rep would do next", "urgency": "one of: low, moderate, high"}}
   ]
 }}
 
@@ -95,6 +101,7 @@ Rules:
 - scheduling_constraints: Only populate if time/day/availability is discussed. Otherwise empty arrays.
 - family_context: Only populate if siblings, other family members, or household dynamics are mentioned. Otherwise empty.
 - objections: Only populate if the lead explicitly raises a concern or pushback. Each objection has a topic, detail, and severity.
+- additional_signals: Capture ANY other noteworthy signal that doesn't fit the categories above — emotional state, life events (job loss, divorce, relocation), cultural considerations, competitive offers from other programs, child's special needs or talents, parent's motivation or hesitation, referral potential, community connections, or anything else a thoughtful human rep would want to know before the next interaction. If nothing notable, return an empty array.
 - If the interaction was a no_answer/voicemail, provide minimal extraction (empty enriched fields).
 - Be concise. Every token costs money. Only extract what's actually in the transcript — do NOT infer or hallucinate."""
 
@@ -172,6 +179,7 @@ def _openai_extraction(prompt: str) -> LLMExtractionResult:
             scheduling_constraints=data.get("scheduling_constraints"),
             family_context=data.get("family_context"),
             objections=data.get("objections"),
+            additional_signals=data.get("additional_signals"),
         )
     except Exception as e:
         logger.error(f"OpenAI extraction failed: {e}")
@@ -306,6 +314,51 @@ def _mock_extraction(transcript: str, channel: str, direction: str, status: str)
             "severity": "moderate",
         })
 
+    # ─── Additional signals (open-ended) ────────────────────────────────
+    additional_signals = []
+    if any(w in transcript_lower for w in ["other program", "competitor", "another academy", "ymca", "rec league"]):
+        additional_signals.append({
+            "signal": "competitive_offer",
+            "detail": "Lead mentioned another program or competitor",
+            "suggested_action": "Highlight unique differentiators of our academy",
+            "urgency": "moderate",
+        })
+    if any(w in transcript_lower for w in ["lost job", "laid off", "unemployed", "between jobs"]):
+        additional_signals.append({
+            "signal": "employment_hardship",
+            "detail": "Lead mentioned job loss or unemployment",
+            "suggested_action": "Proactively offer hardship scholarship or deferred payment options",
+            "urgency": "high",
+        })
+    if any(w in transcript_lower for w in ["special needs", "disability", "adhd", "autism", "accommodation"]):
+        additional_signals.append({
+            "signal": "special_needs",
+            "detail": "Child may need accommodations",
+            "suggested_action": "Connect with program director to discuss inclusion support",
+            "urgency": "high",
+        })
+    if any(w in transcript_lower for w in ["divorce", "custody", "separated"]):
+        additional_signals.append({
+            "signal": "family_transition",
+            "detail": "Family going through separation or custody situation",
+            "suggested_action": "Be sensitive in communications, may need to coordinate with both parents",
+            "urgency": "moderate",
+        })
+    if any(w in transcript_lower for w in ["friend", "neighbor", "referred", "told me about"]):
+        additional_signals.append({
+            "signal": "referral_source",
+            "detail": "Lead was referred by someone or mentioned a connection",
+            "suggested_action": "Acknowledge the referral, consider referral incentive program",
+            "urgency": "low",
+        })
+    if any(w in transcript_lower for w in ["gifted", "talented", "competitive", "travel team", "varsity", "elite"]):
+        additional_signals.append({
+            "signal": "high_performance_interest",
+            "detail": "Child may be advanced or parent has competitive aspirations",
+            "suggested_action": "Highlight advanced/competitive program tracks and coaching credentials",
+            "urgency": "moderate",
+        })
+
     # ─── Open questions ────────────────────────────────────────────────
     if "?" in transcript:
         open_questions.append("Lead asked questions that need follow-up")
@@ -329,4 +382,5 @@ def _mock_extraction(transcript: str, channel: str, direction: str, status: str)
         scheduling_constraints=scheduling_constraints,
         family_context=family_context,
         objections=objections,
+        additional_signals=additional_signals,
     )
