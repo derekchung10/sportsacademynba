@@ -78,14 +78,19 @@ def flush_sms_thread(lead_id: UUID) -> dict | None:
             logger.error("SMSBuffer %s has no linked Interaction", buf_list[-1].id)
             return None
 
-        buffers.update(flushed=True)
-
     logger.info(
-        "Flushed %d SMS messages for lead %s → processing interaction %s",
+        "Flushing %d SMS messages for lead %s → processing interaction %s",
         len(buf_list), lead_id, anchor.id,
     )
 
+    # Process first, then mark flushed — if processing fails, messages
+    # remain unflushed and the sweep will retry them.
     result = process_interaction(anchor, transcript_override=combined_transcript)
+
+    SMSBuffer.objects.filter(
+        lead_id=lead_id, id__in=[b.id for b in buf_list]
+    ).update(flushed=True)
+
     return result
 
 

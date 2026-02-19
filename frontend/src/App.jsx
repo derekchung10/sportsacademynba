@@ -113,12 +113,14 @@ export default function App() {
         fetchLeadDetail(leadId),
         fetchNBAHistory(leadId),
       ]);
+      // Guard against stale responses — user may have clicked another lead
+      if (selectedLeadIdRef.current !== leadId) return;
       setSelectedLead(detail);
       setNbaHistory(history);
     } catch (e) {
       console.error('Failed to fetch lead detail', e);
     }
-    setLoadingDetail(false);
+    if (selectedLeadIdRef.current === leadId) setLoadingDetail(false);
   }, []);
 
   const handleArchive = useCallback(async (leadId) => {

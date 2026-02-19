@@ -39,12 +39,14 @@ class LeadSerializer(serializers.ModelSerializer):
 
 class LeadSummarySerializer(serializers.ModelSerializer):
     """Lightweight lead listing for search/filter results."""
+    nba_priority = serializers.CharField(read_only=True, default=None)
+
     class Meta:
         model = Lead
         fields = [
             'id', 'first_name', 'last_name', 'phone', 'email',
             'child_name', 'sport', 'status', 'total_interactions',
-            'campaign_goal', 'created_at', 'updated_at',
+            'campaign_goal', 'created_at', 'updated_at', 'nba_priority',
         ]
 
 

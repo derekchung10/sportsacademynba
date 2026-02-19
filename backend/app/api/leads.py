@@ -101,6 +101,15 @@ class LeadListCreateView(APIView):
                 Q(child_name__icontains=search)
             )
 
+        # ─── Always annotate NBA priority for display ────────────────
+        from django.db.models import Subquery, OuterRef
+        priority_sq = (
+            NBADecision.objects
+            .filter(lead_id=OuterRef("id"), is_current=True)
+            .values("priority")[:1]
+        )
+        queryset = queryset.annotate(nba_priority=Subquery(priority_sq))
+
         # ─── Sorting ──────────────────────────────────────────────────
         sort_by = request.query_params.get("sort_by", "updated_at")
         sort_order = request.query_params.get("sort_order", "desc")
@@ -111,27 +120,19 @@ class LeadListCreateView(APIView):
         if sort_by not in allowed_sort_fields:
             sort_by = "updated_at"
 
+        # Reusable priority rank annotation for tiebreaking
+        priority_ordering = Case(
+            When(nba_priority="urgent", then=Value(0)),
+            When(nba_priority="high", then=Value(1)),
+            When(nba_priority="normal", then=Value(2)),
+            When(nba_priority="low", then=Value(3)),
+            default=Value(99),
+            output_field=IntegerField(),
+        )
+        queryset = queryset.annotate(priority_rank=priority_ordering)
+
         if sort_by == "nba_priority":
-            from django.db.models import Subquery, OuterRef
-            priority_sq = (
-                NBADecision.objects
-                .filter(lead_id=OuterRef("id"), is_current=True)
-                .values("priority")[:1]
-            )
-            priority_ordering = Case(
-                When(nba_pri="urgent", then=Value(0)),
-                When(nba_pri="high", then=Value(1)),
-                When(nba_pri="normal", then=Value(2)),
-                When(nba_pri="low", then=Value(3)),
-                default=Value(99),
-                output_field=IntegerField(),
-            )
-            queryset = (
-                queryset
-                .annotate(nba_pri=Subquery(priority_sq))
-                .annotate(priority_rank=priority_ordering)
-                .order_by("priority_rank", "-updated_at")
-            )
+            queryset = queryset.order_by("priority_rank", "-updated_at")
         elif sort_by == "status":
             status_ordering = Case(
                 *[When(status=s, then=Value(idx)) for s, idx in STATUS_PIPELINE_ORDER.items()],
@@ -142,6 +143,9 @@ class LeadListCreateView(APIView):
             queryset = queryset.annotate(status_order=status_ordering).order_by(
                 f"{order_prefix}status_order"
             )
+        elif sort_by == "updated_at":
+            order_prefix = "-" if sort_order == "desc" else ""
+            queryset = queryset.order_by(f"{order_prefix}updated_at", "priority_rank")
         else:
             order_prefix = "-" if sort_order == "desc" else ""
             queryset = queryset.order_by(f"{order_prefix}{sort_by}")

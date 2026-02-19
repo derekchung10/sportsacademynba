@@ -20,18 +20,22 @@ python manage.py setup_sms_sweep  # Register periodic SMS batch flush task
 python seed_data.py               # Seed demo leads + interactions
 
 # 4. Start server
-python manage.py runserver
+python manage.py runserver 8001
 
 # 5. (Optional) Start background worker for SMS batch flushing
 python manage.py qcluster
 
-# 5. Open
-# Dashboard: http://localhost:8000
+# 6. Start frontend
+cd ../frontend
+npm install
+npm run dev
+
+# Dashboard: http://localhost:5174
 ```
 
 ### Quick Demo Script
 
-1. Open http://localhost:8000 — see leads in various lifecycle states
+1. Open http://localhost:5174 — see leads in various lifecycle states
 2. Click a lead to see their timeline, interactions, context artifacts, and NBA decisions
 3. Check the **NBA History** tab to see how the RL engine's decisions evolve over interactions
 4. Submit a new interaction via `POST /api/interactions/` — watch the full pipeline: LLM extraction → context enrichment → Q-table update → RL action selection → action brief generation
@@ -62,7 +66,7 @@ for t in StateTransition.objects.order_by('-created_at')[:10]:
 ## System Overview
 
 ```
-                     Operator Dashboard (HTML/Alpine.js/Tailwind)
+                     Operator Dashboard (React 18/Tailwind CSS/Vite)
                                     |
                               REST API (Django REST Framework)
                                     |

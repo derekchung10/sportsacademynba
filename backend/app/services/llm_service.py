@@ -131,17 +131,21 @@ def extract_from_interaction(
             open_questions=[],
         )
 
-    prompt = EXTRACTION_PROMPT.format(
-        lead_name=lead_name,
-        child_info=child_info or "Unknown",
-        sport=sport or "Unknown",
-        academy_name=academy_name or "Sports Academy",
-        campaign_goal=campaign_goal or "General outreach",
-        channel=channel,
-        direction=direction,
-        status=status,
-        transcript=transcript,
-    )
+    # Manual replacement instead of str.format() — avoids crashes when
+    # transcripts (or other fields) contain literal { or } characters.
+    prompt = EXTRACTION_PROMPT
+    for placeholder, value in [
+        ("{lead_name}", lead_name),
+        ("{child_info}", child_info or "Unknown"),
+        ("{sport}", sport or "Unknown"),
+        ("{academy_name}", academy_name or "Sports Academy"),
+        ("{campaign_goal}", campaign_goal or "General outreach"),
+        ("{channel}", channel),
+        ("{direction}", direction),
+        ("{status}", status),
+        ("{transcript}", transcript),
+    ]:
+        prompt = prompt.replace(placeholder, value)
 
     if settings.LLM_PROVIDER == "mock":
         return _mock_extraction(transcript, channel, direction, status)

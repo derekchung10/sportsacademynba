@@ -23,6 +23,10 @@ export default function InfoPanel({ detail, nbaHistory, onClose, onRefresh }) {
       setNotesText(detail.lead.internal_notes || '');
       setNotesDirty(false);
     }
+    // Clear any pending save timer when lead changes or component unmounts
+    return () => {
+      if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+    };
   }, [leadId]);
 
   if (!detail) return null;
@@ -167,7 +171,7 @@ export default function InfoPanel({ detail, nbaHistory, onClose, onRefresh }) {
             <textarea
               value={notesText}
               onChange={(e) => handleNotesChange(e.target.value)}
-              onBlur={() => { if (notesDirty) saveNotes(notesText); }}
+              onBlur={() => { if (notesTimerRef.current) clearTimeout(notesTimerRef.current); if (notesDirty) saveNotes(notesText); }}
               placeholder="Add private notes about this lead..."
               rows={4}
               className="w-full text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 resize-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none leading-relaxed"
@@ -178,33 +182,35 @@ export default function InfoPanel({ detail, nbaHistory, onClose, onRefresh }) {
           </div>
         </CollapsibleSection>
 
-        {/* NBA Recommendation */}
-        <CollapsibleSection
-          title="💡 Recommended Action"
-          isOpen={expandedSection === 'nba'}
-          onToggle={() => toggleSection('nba')}
-          highlight
-        >
-          {current_nba ? (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${actionBadgeClass(current_nba.action)}`}>
-                  {actionLabel(current_nba.action)}
-                </span>
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${priorityClass(current_nba.priority)}`}>
-                  {priorityLabel(current_nba.priority)}
-                </span>
+        {/* NBA Recommendation — hidden for archived leads */}
+        {!lead.is_archived && (
+          <CollapsibleSection
+            title="💡 Recommended Action"
+            isOpen={expandedSection === 'nba'}
+            onToggle={() => toggleSection('nba')}
+            highlight
+          >
+            {current_nba ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${actionBadgeClass(current_nba.action)}`}>
+                    {actionLabel(current_nba.action)}
+                  </span>
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${priorityClass(current_nba.priority)}`}>
+                    {priorityLabel(current_nba.priority)}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-700 leading-relaxed break-words">{current_nba.reasoning}</p>
+                <div className="text-[10px] text-gray-400 space-y-0.5">
+                  {current_nba.scheduled_for && <p>Scheduled for: {formatDate(current_nba.scheduled_for)}</p>}
+                  {current_nba.created_at && <p>Generated: {formatDate(current_nba.created_at)}</p>}
+                </div>
               </div>
-              <p className="text-xs text-gray-700 leading-relaxed break-words">{current_nba.reasoning}</p>
-              <div className="text-[10px] text-gray-400 space-y-0.5">
-                {current_nba.scheduled_for && <p>Scheduled for: {formatDate(current_nba.scheduled_for)}</p>}
-                {current_nba.created_at && <p>Generated: {formatDate(current_nba.created_at)}</p>}
-              </div>
-            </div>
-          ) : (
-            <p className="text-xs text-gray-400">No recommendation yet</p>
-          )}
-        </CollapsibleSection>
+            ) : (
+              <p className="text-xs text-gray-400">No recommendation yet</p>
+            )}
+          </CollapsibleSection>
+        )}
 
         {/* Context / Insights */}
         <CollapsibleSection

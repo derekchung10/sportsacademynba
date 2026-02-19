@@ -280,8 +280,8 @@ export default function ChatView({ detail, onRefresh, showInfoPanel, onToggleInf
 
       {/* NBA Suggestion + Composer */}
       <div className="border-t border-gray-200 bg-white">
-        {/* NBA Recommendation Banner */}
-        {current_nba && (
+        {/* NBA Recommendation Banner — hidden for archived leads */}
+        {current_nba && !lead?.is_archived && (
           <div className={`flex items-start gap-2 px-3 pt-2.5 pb-1.5 ${
             current_nba.action === 'stop' ? 'text-red-700' : 'text-blue-700'
           }`}>

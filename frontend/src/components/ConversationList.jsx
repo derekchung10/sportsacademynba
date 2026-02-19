@@ -115,9 +115,16 @@ export default function ConversationList({
                   <span className={`text-sm font-semibold truncate ${isSelected ? 'text-blue-900' : 'text-gray-900'}`}>
                     {lead.first_name} {lead.last_name}
                   </span>
-                  <span className="text-[10px] text-gray-400 flex-shrink-0 ml-2 group-hover:hidden">
-                    {formatRelativeTime(lead.updated_at)}
-                  </span>
+                  <div className="flex items-center gap-1.5 flex-shrink-0 ml-2 group-hover:hidden">
+                    {lead.nba_priority && lead.nba_priority !== 'low' && (
+                      <span className={`text-[9px] font-semibold px-1 py-px rounded ${priorityBadge(lead.nba_priority)}`}>
+                        {lead.nba_priority === 'urgent' ? 'URGENT' : lead.nba_priority === 'high' ? 'HIGH' : 'MED'}
+                      </span>
+                    )}
+                    <span className="text-[10px] text-gray-400">
+                      {formatRelativeTime(lead.updated_at)}
+                    </span>
+                  </div>
                 </div>
                 <div className="flex items-center gap-1.5 mt-0.5">
                   <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${statusDotColor(lead.status)}`} />
@@ -186,6 +193,15 @@ function statusDotColor(status) {
     unresponsive: 'bg-gray-300',
   };
   return map[status] || 'bg-gray-400';
+}
+
+function priorityBadge(priority) {
+  const map = {
+    urgent: 'bg-red-100 text-red-700',
+    high: 'bg-orange-100 text-orange-700',
+    normal: 'bg-blue-50 text-blue-600',
+  };
+  return map[priority] || '';
 }
 
 function SortRecentIcon({ className }) {

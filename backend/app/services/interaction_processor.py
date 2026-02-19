@@ -18,6 +18,7 @@ import logging
 from datetime import datetime, timezone
 
 from django.db import transaction
+from django.db.models import F
 
 from app.models.lead import Lead
 from app.models.interaction import Interaction
@@ -53,55 +54,58 @@ def process_interaction(interaction: Interaction, transcript_override: str = Non
 
     llm_transcript = transcript_override or interaction.transcript
 
+    # ─── Step 1: Log interaction event (outside main txn — append-only) ──
+    Event.objects.create(
+        lead_id=lead.id,
+        event_type="interaction_completed",
+        source="system",
+        source_id=str(interaction.id),
+        payload={
+            "channel": interaction.channel,
+            "direction": interaction.direction,
+            "status": interaction.status,
+            "duration_seconds": interaction.duration_seconds,
+        },
+        description=(
+            f"{interaction.channel.title()} {interaction.direction} — {interaction.status}"
+            + (f" ({interaction.duration_seconds}s)" if interaction.duration_seconds else "")
+        ),
+    )
+    results["steps"].append("event_logged")
+
+    # ─── Step 2: LLM extraction (outside txn — may be a slow HTTP call) ──
+    extraction = extract_from_interaction(
+        transcript=llm_transcript,
+        lead_name=f"{lead.first_name} {lead.last_name}",
+        child_info=build_child_info(lead),
+        sport=lead.sport or "",
+        academy_name=lead.academy_name or "",
+        campaign_goal=lead.campaign_goal or "",
+        channel=interaction.channel,
+        direction=interaction.direction,
+        status=interaction.status,
+    )
+
+    # Update interaction with LLM results
+    interaction.summary = extraction.summary
+    interaction.extracted_facts = extraction.facts
+    interaction.detected_intent = extraction.intent
+    interaction.sentiment = extraction.sentiment
+    interaction.open_questions = extraction.open_questions
+    interaction.processed = True
+    interaction.processed_at = datetime.now(timezone.utc)
+    interaction.save()
+    results["steps"].append("llm_extraction")
+
+    # ─── Steps 3-6: DB mutations in a single transaction ─────────────────
     with transaction.atomic():
-        # ─── Step 1: Log interaction event ────────────────────────────────
-        Event.objects.create(
-            lead_id=lead.id,
-            event_type="interaction_completed",
-            source="system",
-            source_id=str(interaction.id),
-            payload={
-                "channel": interaction.channel,
-                "direction": interaction.direction,
-                "status": interaction.status,
-                "duration_seconds": interaction.duration_seconds,
-            },
-            description=(
-                f"{interaction.channel.title()} {interaction.direction} — {interaction.status}"
-                + (f" ({interaction.duration_seconds}s)" if interaction.duration_seconds else "")
-            ),
-        )
-        results["steps"].append("event_logged")
+        # Re-fetch lead with row lock to prevent lost updates
+        lead = Lead.objects.select_for_update().get(id=lead.id)
 
-        # ─── Step 2: LLM extraction ──────────────────────────────────────
-        extraction = extract_from_interaction(
-            transcript=llm_transcript,
-            lead_name=f"{lead.first_name} {lead.last_name}",
-            child_info=build_child_info(lead),
-            sport=lead.sport or "",
-            academy_name=lead.academy_name or "",
-            campaign_goal=lead.campaign_goal or "",
-            channel=interaction.channel,
-            direction=interaction.direction,
-            status=interaction.status,
-        )
-
-        # Update interaction with LLM results (JSONField handles serialization)
-        interaction.summary = extraction.summary
-        interaction.extracted_facts = extraction.facts
-        interaction.detected_intent = extraction.intent
-        interaction.sentiment = extraction.sentiment
-        interaction.open_questions = extraction.open_questions
-        interaction.processed = True
-        interaction.processed_at = datetime.now(timezone.utc)
-        interaction.save()
-        results["steps"].append("llm_extraction")
-
-        # ─── Step 3: Persist context artifacts ────────────────────────────
+        # Step 3: Persist context artifacts
         artifacts = enrich_from_extraction(lead.id, interaction.id, extraction)
         results["steps"].append(f"context_artifacts_created ({len(artifacts)})")
 
-        # Log context enrichment event
         Event.objects.create(
             lead_id=lead.id,
             event_type="context_enriched",
@@ -116,21 +120,26 @@ def process_interaction(interaction: Interaction, transcript_override: str = Non
             description=f"Context enriched: intent={extraction.intent}, sentiment={extraction.sentiment}",
         )
 
-        # ─── Step 4: Update lead state ────────────────────────────────────
+        # Step 4: Update lead state with atomic counter increments
         old_status = lead.status
-        lead.total_interactions += 1
 
+        counter_updates = {
+            "total_interactions": F("total_interactions") + 1,
+        }
         if interaction.channel == "voice":
-            lead.total_voice_attempts += 1
+            counter_updates["total_voice_attempts"] = F("total_voice_attempts") + 1
         elif interaction.channel == "sms":
-            lead.total_sms_attempts += 1
+            counter_updates["total_sms_attempts"] = F("total_sms_attempts") + 1
         elif interaction.channel == "email":
-            lead.total_email_attempts += 1
+            counter_updates["total_email_attempts"] = F("total_email_attempts") + 1
+
+        Lead.objects.filter(id=lead.id).update(**counter_updates)
 
         # Derive new status from intent
         new_status = _derive_lead_status(lead.status, extraction.intent, interaction.status)
         if new_status != old_status:
             lead.status = new_status
+            lead.save(update_fields=["status", "updated_at"])
             Event.objects.create(
                 lead_id=lead.id,
                 event_type="status_changed",
@@ -141,12 +150,13 @@ def process_interaction(interaction: Interaction, transcript_override: str = Non
             )
             results["steps"].append(f"status_updated ({old_status} -> {new_status})")
 
-        lead.save()
+        # Refresh to get updated counters for downstream use
+        lead.refresh_from_db()
 
-        # ─── Step 5: Q-table update (reward previous action) ─────────────
+        # Step 5: Q-table update (reward previous action)
         _update_q_table_from_transition(lead, old_status, new_status, results)
 
-        # ─── Step 6: Compute NBA via RL engine ───────────────────────────
+        # Step 6: Compute NBA via RL engine
         action_brief, policy_inputs = compute_nba(lead, interaction)
 
         decision = persist_nba_decision(lead, action_brief, str(interaction.id), policy_inputs)
@@ -154,7 +164,6 @@ def process_interaction(interaction: Interaction, transcript_override: str = Non
             f"nba_produced ({action_brief.semantic_action}/{action_brief.channel})"
         )
 
-        # Log NBA event
         Event.objects.create(
             lead_id=lead.id,
             event_type="nba_produced",

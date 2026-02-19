@@ -5,6 +5,7 @@ An autonomous outreach platform for sports academies that learns optimal engagem
 ## Quick Start
 
 ```bash
+# ─── Backend ─────────────────────────────────────────────
 cd backend
 
 # Create virtual environment
@@ -29,15 +30,20 @@ python manage.py setup_sms_sweep
 # Seed demo data (leads + interactions)
 python seed_data.py
 
-# Start server
-python manage.py runserver
+# Start server on port 8001
+python manage.py runserver 8001
 
 # (Optional) Start background worker for SMS batch flushing
 python manage.py qcluster
+
+# ─── Frontend ────────────────────────────────────────────
+cd ../frontend
+npm install
+npm run dev          # Starts Vite dev server on port 5174
 ```
 
 **Open in browser:**
-- Dashboard: http://localhost:8000
+- Dashboard: http://localhost:5174
 
 ## How It Works
 
@@ -90,4 +96,4 @@ See [DESIGN.md](DESIGN.md) for detailed architecture, trade-offs, RL design deci
 - **Database**: SQLite (dev) / PostgreSQL (production)
 - **LLM**: OpenAI gpt-4o-mini (with mock fallback for zero-cost development)
 - **RL**: Tabular Q-learning with UCB exploration, ~1,080 state-action pairs
-- **Frontend**: Alpine.js + Tailwind CSS (served by Django)
+- **Frontend**: React 18 + Tailwind CSS (Vite dev server)

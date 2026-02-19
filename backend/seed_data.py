@@ -360,9 +360,22 @@ def seed():
         lead_idx = data.pop("lead_index")
         lead = lead_records[lead_idx]
 
+        # Extract the timestamp before creating (auto_now_add prevents normal assignment)
+        backdate = data.get("started_at")
+
         interaction = Interaction.objects.create(lead=lead, **data)
 
+        # Backdate created_at so the UI shows realistic relative times
+        if backdate:
+            Interaction.objects.filter(id=interaction.id).update(created_at=backdate)
+            interaction.refresh_from_db()
+
         result = process_interaction(interaction)
+
+        # Also backdate the lead's updated_at to match the last interaction
+        if backdate:
+            Lead.objects.filter(id=lead.id).update(updated_at=backdate)
+
         lead.refresh_from_db()
         print(
             f"  [{i+1}/{len(INTERACTIONS)}] {lead.first_name} {lead.last_name} ({lead.status}): "
@@ -414,7 +427,7 @@ def seed():
         lead.refresh_from_db()
         print(f"  {lead.first_name} {lead.last_name:12s} | {lead.status:12s} | {lead.child_name} ({lead.sport})")
     print(f"\nRun the server: python manage.py runserver")
-    print(f"Open dashboard: http://localhost:5173/")
+    print(f"Open dashboard: http://localhost:5174/")
 
 
 if __name__ == "__main__":
