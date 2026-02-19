@@ -39,8 +39,13 @@ class Lead(models.Model):
     total_sms_attempts = models.IntegerField(default=0)
     total_email_attempts = models.IntegerField(default=0)
 
+    is_archived = models.BooleanField(default=False, db_index=True)
+
     # Tags / notes derived from LLM
     tags = models.JSONField(default=list, blank=True)  # Array of tags
+
+    # Operator-facing internal notes (free text, not visible to the lead)
+    internal_notes = models.TextField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

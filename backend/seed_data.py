@@ -13,9 +13,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'academy_outreach.settings')
 django.setup()
 
+from datetime import datetime, timedelta, timezone
 from app.models.lead import Lead
 from app.models.interaction import Interaction
+from app.models.event import Event
 from app.services.interaction_processor import process_interaction
+
+# Base time: yesterday 9am local (so timestamps look realistic)
+_BASE = datetime.now(timezone.utc).replace(hour=9, minute=0, second=0, microsecond=0) - timedelta(days=1)
 
 
 LEADS = [
@@ -148,64 +153,80 @@ LEADS = [
     },
 ]
 
-# Interactions to simulate a realistic timeline
+# Interactions with realistic timestamps.
+# Outbound messages go out during business hours; inbound replies come at
+# the time the parent actually responds (lunch, evening, etc.) so the RL
+# engine can learn optimal contact windows.
+# _t(hours) offsets from _BASE (yesterday 9am).
+def _t(hours):
+    return _BASE + timedelta(hours=hours)
+
 INTERACTIONS = [
-    # ─── David Chen (contacted): SMS conversation, on the fence ─────
+    # ─── David Chen: SMS thread, on the fence ─────────────────────────
+    # Outbound at 10am, David replies at 12:30pm (lunch break)
+    # Follow-up at 1pm, David replies at 6:15pm (evening)
     {
-        "lead_index": 1,
-        "channel": "sms",
-        "direction": "outbound",
-        "status": "completed",
+        "lead_index": 1, "channel": "sms", "direction": "outbound", "status": "completed",
+        "started_at": _t(1), "ended_at": _t(1),
         "transcript": (
-            "Agent: Hi David, this is Elite Sports Academy. We have an excellent tennis program "
-            "that would be perfect for Lily. Would you be interested in scheduling a visit?\n"
-            "David: Hi, thanks for reaching out. Lily does play tennis but she's already "
-            "at another academy. What makes your program different?\n"
-            "Agent: Great question! Our coaches include two former ATP tour players, and we "
-            "have a 4:1 student-to-coach ratio. We also offer college recruitment support. "
-            "Would you like to come see a practice session?\n"
-            "David: Hmm, let me think about it. The coach ratio is impressive though."
+            "Hi David, this is Elite Sports Academy. We have an excellent tennis program "
+            "that would be perfect for Lily. Would you be interested in scheduling a visit?"
         ),
     },
-
-    # ─── James Thompson (interested): Hard to reach but interested ──
     {
-        "lead_index": 2,
-        "channel": "voice",
-        "direction": "outbound",
-        "status": "no_answer",
-        "duration_seconds": 0,
+        "lead_index": 1, "channel": "sms", "direction": "inbound", "status": "completed",
+        "started_at": _t(3.5), "ended_at": _t(3.5),
+        "transcript": (
+            "Hi, thanks for reaching out. Lily does play tennis but she's already "
+            "at another academy. What makes your program different?"
+        ),
     },
     {
-        "lead_index": 2,
-        "channel": "voice",
-        "direction": "outbound",
-        "status": "voicemail",
-        "duration_seconds": 30,
+        "lead_index": 1, "channel": "sms", "direction": "outbound", "status": "completed",
+        "started_at": _t(4), "ended_at": _t(4),
         "transcript": (
-            "Agent: Hi James, this is Elite Sports Academy calling about our competitive "
+            "Great question! Our coaches include two former ATP tour players, and we "
+            "have a 4:1 student-to-coach ratio. We also offer college recruitment support. "
+            "Would you like to come see a practice session?"
+        ),
+    },
+    {
+        "lead_index": 1, "channel": "sms", "direction": "inbound", "status": "completed",
+        "started_at": _t(9.25), "ended_at": _t(9.25),
+        "transcript": "Hmm, let me think about it. The coach ratio is impressive though.",
+    },
+
+    # ─── James Thompson: Hard to reach, then replied via SMS ──────────
+    # Calls at 10am and 2pm (no answer), replies by SMS at 8:45pm
+    {
+        "lead_index": 2, "channel": "voice", "direction": "outbound",
+        "status": "no_answer", "duration_seconds": 0,
+        "started_at": _t(1), "ended_at": _t(1),
+    },
+    {
+        "lead_index": 2, "channel": "voice", "direction": "outbound",
+        "status": "voicemail", "duration_seconds": 30,
+        "started_at": _t(5), "ended_at": _t(5),
+        "transcript": (
+            "Hi James, this is Elite Sports Academy calling about our competitive "
             "swim team for Emma. We have some exciting programs for her age group. "
             "Please call us back at 555-0200 or reply to our text. Thanks!"
         ),
     },
     {
-        "lead_index": 2,
-        "channel": "sms",
-        "direction": "inbound",
-        "status": "completed",
+        "lead_index": 2, "channel": "sms", "direction": "inbound", "status": "completed",
+        "started_at": _t(11.75), "ended_at": _t(11.75),
         "transcript": (
-            "James: Sorry I missed your calls! Emma is really interested in swimming. "
+            "Sorry I missed your calls! Emma is really interested in swimming. "
             "Can we come watch a practice session this week?"
         ),
     },
 
-    # ─── Sarah Mitchell (trial): Came for trial, deciding ──────────
+    # ─── Sarah Mitchell: Came for trial, deciding (phone call at 5:30pm) ─
     {
-        "lead_index": 3,
-        "channel": "voice",
-        "direction": "outbound",
-        "status": "completed",
-        "duration_seconds": 180,
+        "lead_index": 3, "channel": "voice", "direction": "outbound",
+        "status": "completed", "duration_seconds": 180,
+        "started_at": _t(8.5), "ended_at": _t(8.55),
         "transcript": (
             "Agent: Hi Sarah, this is Coach Davis from Elite Sports Academy. "
             "I'm calling about our basketball program for Jake.\n"
@@ -221,45 +242,71 @@ INTERACTIONS = [
         ),
     },
 
-    # ─── Maria Rodriguez (active): Check-in conversation ────────────
+    # ─── Maria Rodriguez: Check-in SMS thread ─────────────────────────
+    # Outbound at 3pm, Maria replies at 3:20pm (quick responder, afternoon)
+    # Follow-up at 3:30pm, Maria replies at 4:05pm
     {
-        "lead_index": 4,
-        "channel": "sms",
-        "direction": "outbound",
-        "status": "completed",
+        "lead_index": 4, "channel": "sms", "direction": "outbound", "status": "completed",
+        "started_at": _t(6), "ended_at": _t(6),
+        "transcript": "Hi Maria! Just wanted to check in — how's Carlos enjoying soccer this season?",
+    },
+    {
+        "lead_index": 4, "channel": "sms", "direction": "inbound", "status": "completed",
+        "started_at": _t(6.33), "ended_at": _t(6.33),
+        "transcript": "He loves it! Coach says he's one of the hardest workers on the team.",
+    },
+    {
+        "lead_index": 4, "channel": "sms", "direction": "outbound", "status": "completed",
+        "started_at": _t(6.5), "ended_at": _t(6.5),
         "transcript": (
-            "Agent: Hi Maria! Just wanted to check in — how's Carlos enjoying soccer this season?\n"
-            "Maria: He loves it! Coach says he's one of the hardest workers on the team.\n"
-            "Agent: That's great to hear! We have a tournament coming up March 15th. "
-            "Carlos is definitely on the roster if you're interested.\n"
-            "Maria: Absolutely! He'd love that. Can you send me the details?"
+            "That's great to hear! We have a tournament coming up March 15th. "
+            "Carlos is definitely on the roster if you're interested."
         ),
     },
-
-    # ─── Angela Kim (at_risk): Missing classes ──────────────────────
     {
-        "lead_index": 6,
-        "channel": "sms",
-        "direction": "outbound",
-        "status": "completed",
-        "transcript": (
-            "Agent: Hi Angela! We noticed Sophie missed the last couple gymnastics classes. "
-            "Is everything okay? We'd love to see her back!\n"
-            "Angela: Hi, thanks for checking. Sophie's been dealing with a cold. "
-            "Also, the Tuesday class conflicts with her piano lessons now.\n"
-            "Agent: Oh no, hope she feels better! We actually have a Thursday class at the same time "
-            "— would that work better?\n"
-            "Angela: Thursday could work! Let me check and get back to you."
-        ),
+        "lead_index": 4, "channel": "sms", "direction": "inbound", "status": "completed",
+        "started_at": _t(7.08), "ended_at": _t(7.08),
+        "transcript": "Absolutely! He'd love that. Can you send me the details?",
     },
 
-    # ─── Marcus Brown (inactive): Dropped off, trying to win back ───
+    # ─── Angela Kim: Missing classes SMS thread ───────────────────────
+    # Outbound at 11am, Angela replies at 7:30pm (evening, after kids' bedtime)
+    # Follow-up at 7:45pm, Angela replies at 8:10pm
     {
-        "lead_index": 7,
-        "channel": "voice",
-        "direction": "outbound",
-        "status": "completed",
-        "duration_seconds": 120,
+        "lead_index": 6, "channel": "sms", "direction": "outbound", "status": "completed",
+        "started_at": _t(2), "ended_at": _t(2),
+        "transcript": (
+            "Hi Angela! We noticed Sophie missed the last couple gymnastics classes. "
+            "Is everything okay? We'd love to see her back!"
+        ),
+    },
+    {
+        "lead_index": 6, "channel": "sms", "direction": "inbound", "status": "completed",
+        "started_at": _t(10.5), "ended_at": _t(10.5),
+        "transcript": (
+            "Hi, thanks for checking. Sophie's been dealing with a cold. "
+            "Also, the Tuesday class conflicts with her piano lessons now."
+        ),
+    },
+    {
+        "lead_index": 6, "channel": "sms", "direction": "outbound", "status": "completed",
+        "started_at": _t(10.75), "ended_at": _t(10.75),
+        "transcript": (
+            "Oh no, hope she feels better! We actually have a Thursday class at the same time "
+            "— would that work better?"
+        ),
+    },
+    {
+        "lead_index": 6, "channel": "sms", "direction": "inbound", "status": "completed",
+        "started_at": _t(11.17), "ended_at": _t(11.17),
+        "transcript": "Thursday could work! Let me check and get back to you.",
+    },
+
+    # ─── Marcus Brown: Win-back phone call (connected at 6pm) ─────────
+    {
+        "lead_index": 7, "channel": "voice", "direction": "outbound",
+        "status": "completed", "duration_seconds": 120,
+        "started_at": _t(9), "ended_at": _t(9.03),
         "transcript": (
             "Agent: Hi Marcus, this is Elite Sports Academy. We haven't seen Jaylen "
             "at basketball in a while and wanted to check in.\n"
@@ -274,13 +321,11 @@ INTERACTIONS = [
         ),
     },
 
-    # ─── Tom Garcia (declined): Said no ─────────────────────────────
+    # ─── Tom Garcia: Said no (phone call at 11am) ─────────────────────
     {
-        "lead_index": 9,
-        "channel": "voice",
-        "direction": "outbound",
-        "status": "completed",
-        "duration_seconds": 90,
+        "lead_index": 9, "channel": "voice", "direction": "outbound",
+        "status": "completed", "duration_seconds": 90,
+        "started_at": _t(2), "ended_at": _t(2.03),
         "transcript": (
             "Agent: Hi Tom, this is Elite Sports Academy calling about our tennis program for Mia.\n"
             "Tom: Thanks for calling, but we actually signed Mia up at the community center "
@@ -341,6 +386,17 @@ def seed():
             old = lead.status
             lead.status = target_status
             lead.save()
+            # Remove the misleading status_changed events created by the processor
+            Event.objects.filter(
+                lead=lead, event_type="status_changed"
+            ).delete()
+            Event.objects.create(
+                lead=lead,
+                event_type="status_changed",
+                source="system",
+                payload={"old_status": old, "new_status": target_status},
+                description=f"Status changed: {old} -> {target_status}",
+            )
             print(f"  Status override: {lead.first_name} {old} -> {target_status}")
 
     # Trigger NBA for all leads to get current recommendations
@@ -349,7 +405,7 @@ def seed():
         lead.refresh_from_db()
         result, inputs = compute_nba(lead)
         persist_nba_decision(lead, result, None, inputs)
-        print(f"  NBA for {lead.first_name} ({lead.status}): {result.action}/{result.channel}")
+        print(f"  NBA for {lead.first_name} ({lead.status}): {result.semantic_action}/{result.channel}")
 
     # Print summary by status
     print(f"\n{'='*50}")

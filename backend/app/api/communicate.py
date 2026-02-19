@@ -23,6 +23,20 @@ from app.services.interaction_processor import process_interaction
 logger = logging.getLogger(__name__)
 
 
+def _auto_unarchive(lead):
+    """Move a lead out of archive when an outbound message is sent."""
+    if lead.is_archived:
+        lead.is_archived = False
+        lead.save(update_fields=["is_archived", "updated_at"])
+        from app.models.event import Event
+        Event.objects.create(
+            lead_id=lead.id,
+            event_type="lead_unarchived",
+            source="system",
+            description="Conversation unarchived (new outbound message)",
+        )
+
+
 # ─── Mock reply generator ──────────────────────────────────────────────────────
 
 MOCK_SMS_REPLIES = {
@@ -225,6 +239,8 @@ class SendSMSView(APIView):
         except Lead.DoesNotExist:
             return Response({"detail": "Lead not found"}, status=drf_status.HTTP_404_NOT_FOUND)
 
+        _auto_unarchive(lead)
+
         message = request.data.get("message", "").strip()
         if not message:
             return Response({"detail": "Message is required"}, status=drf_status.HTTP_400_BAD_REQUEST)
@@ -264,6 +280,8 @@ class MakeCallView(APIView):
             lead = Lead.objects.get(id=lead_id)
         except Lead.DoesNotExist:
             return Response({"detail": "Lead not found"}, status=drf_status.HTTP_404_NOT_FOUND)
+
+        _auto_unarchive(lead)
 
         result = {"lead_id": str(lead_id)}
 
@@ -311,6 +329,8 @@ class SendEmailView(APIView):
             lead = Lead.objects.get(id=lead_id)
         except Lead.DoesNotExist:
             return Response({"detail": "Lead not found"}, status=drf_status.HTTP_404_NOT_FOUND)
+
+        _auto_unarchive(lead)
 
         subject = request.data.get("subject", "").strip()
         body = request.data.get("body", "").strip()

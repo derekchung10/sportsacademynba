@@ -32,10 +32,14 @@ from app.utils import build_child_info
 logger = logging.getLogger(__name__)
 
 
-def process_interaction(interaction: Interaction) -> dict:
+def process_interaction(interaction: Interaction, transcript_override: str = None) -> dict:
     """
     Full processing pipeline for a completed interaction.
     Returns a summary of what was produced.
+
+    transcript_override: if provided, the LLM sees this text instead of
+    interaction.transcript. Used by the SMS batcher so the LLM gets the
+    full thread context while results are stored on this single interaction.
     """
     lead = Lead.objects.filter(id=interaction.lead_id).first()
     if not lead:
@@ -46,6 +50,8 @@ def process_interaction(interaction: Interaction) -> dict:
         "lead_id": str(lead.id),
         "steps": [],
     }
+
+    llm_transcript = transcript_override or interaction.transcript
 
     with transaction.atomic():
         # ─── Step 1: Log interaction event ────────────────────────────────
@@ -69,7 +75,7 @@ def process_interaction(interaction: Interaction) -> dict:
 
         # ─── Step 2: LLM extraction ──────────────────────────────────────
         extraction = extract_from_interaction(
-            transcript=interaction.transcript,
+            transcript=llm_transcript,
             lead_name=f"{lead.first_name} {lead.last_name}",
             child_info=build_child_info(lead),
             sport=lead.sport or "",

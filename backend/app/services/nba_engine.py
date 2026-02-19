@@ -163,6 +163,43 @@ def _load_enriched_context(lead_id) -> dict:
     return result
 
 
+def _analyze_response_timing(lead_id) -> dict:
+    """
+    Analyze the lead's inbound interaction timestamps to determine when
+    they typically respond. Returns a dict with timing hints.
+    """
+    inbound = (
+        Interaction.objects
+        .filter(lead_id=lead_id, direction="inbound")
+        .values_list("created_at", flat=True)
+        .order_by("created_at")
+    )
+    timestamps = list(inbound)
+    if not timestamps:
+        return {"typical_hour": None, "time_hint": None}
+
+    hours = [ts.hour for ts in timestamps]
+    avg_hour = round(sum(hours) / len(hours))
+
+    if avg_hour < 9:
+        time_hint = "early morning"
+    elif avg_hour < 12:
+        time_hint = "late morning"
+    elif avg_hour < 14:
+        time_hint = "around midday"
+    elif avg_hour < 17:
+        time_hint = "in the afternoon"
+    elif avg_hour < 20:
+        time_hint = "in the evening"
+    else:
+        time_hint = "late evening"
+
+    return {
+        "typical_hour": avg_hour,
+        "time_hint": time_hint,
+    }
+
+
 def _build_policy_inputs(lead: Lead, last_interaction: Interaction | None) -> PolicyInputs:
     """Build policy inputs from lead state, last interaction, and enriched context."""
     hours_since = None
@@ -197,8 +234,14 @@ def _build_policy_inputs(lead: Lead, last_interaction: Interaction | None) -> Po
         additional_signals=enriched["additional_signals"],
     )
 
-    # Attach lead name for message drafting
+    # Attach lead details for brief personalization
     inputs._lead_first_name = lead.first_name
+    inputs._lead_child_name = lead.child_name
+    inputs._lead_sport = lead.sport
+
+    # Attach response timing analysis
+    timing = _analyze_response_timing(lead.id)
+    inputs._response_timing = timing
     return inputs
 
 

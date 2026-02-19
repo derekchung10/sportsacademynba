@@ -7,9 +7,10 @@ Full lifecycle statuses:
   Terminal:    declined, unresponsive
 
 Category mapping (operator-facing):
-- "inbox"          → Leads with a pending scheduled action (your to-do list)
-- "awaiting_reply" → Reached out, waiting to hear back
+- "inbox"          → Non-archived leads with a pending scheduled action (your to-do list)
+- "awaiting_reply" → Non-archived, not inbox, not attending
 - "attending"      → Enrolled AND actively attending (the healthy ones)
+- "archive"        → Manually archived conversations
 """
 from django.db.models import Q, Count, Case, When, Value, IntegerField
 from django.utils import timezone
@@ -68,16 +69,18 @@ class LeadListCreateView(APIView):
 
         # ─── Category filter (operator-facing buckets) ─────────────────
         category = request.query_params.get("category")
-        if category == "inbox":
+        if category == "archive":
+            queryset = queryset.filter(is_archived=True)
+        elif category == "inbox":
             inbox_ids = _inbox_lead_ids()
-            queryset = queryset.filter(id__in=inbox_ids)
+            queryset = queryset.filter(id__in=inbox_ids, is_archived=False)
         elif category == "awaiting_reply":
             inbox_ids = _inbox_lead_ids()
-            queryset = queryset.exclude(
+            queryset = queryset.filter(is_archived=False).exclude(
                 status__in=ATTENDING_STATUSES
             ).exclude(id__in=inbox_ids)
         elif category == "attending":
-            queryset = queryset.filter(status__in=ATTENDING_STATUSES)
+            queryset = queryset.filter(status__in=ATTENDING_STATUSES, is_archived=False)
 
         # ─── Status filter (still available for power users) ───────────
         status_filter = request.query_params.get("status")
@@ -103,12 +106,33 @@ class LeadListCreateView(APIView):
         sort_order = request.query_params.get("sort_order", "desc")
         allowed_sort_fields = [
             "first_name", "last_name", "status", "created_at",
-            "updated_at", "total_interactions",
+            "updated_at", "total_interactions", "nba_priority",
         ]
         if sort_by not in allowed_sort_fields:
             sort_by = "updated_at"
 
-        if sort_by == "status":
+        if sort_by == "nba_priority":
+            from django.db.models import Subquery, OuterRef
+            priority_sq = (
+                NBADecision.objects
+                .filter(lead_id=OuterRef("id"), is_current=True)
+                .values("priority")[:1]
+            )
+            priority_ordering = Case(
+                When(nba_pri="urgent", then=Value(0)),
+                When(nba_pri="high", then=Value(1)),
+                When(nba_pri="normal", then=Value(2)),
+                When(nba_pri="low", then=Value(3)),
+                default=Value(99),
+                output_field=IntegerField(),
+            )
+            queryset = (
+                queryset
+                .annotate(nba_pri=Subquery(priority_sq))
+                .annotate(priority_rank=priority_ordering)
+                .order_by("priority_rank", "-updated_at")
+            )
+        elif sort_by == "status":
             status_ordering = Case(
                 *[When(status=s, then=Value(idx)) for s, idx in STATUS_PIPELINE_ORDER.items()],
                 default=Value(99),
@@ -162,11 +186,21 @@ class LeadStatsView(APIView):
         by_status = {row["status"]: row["count"] for row in status_counts}
         total = sum(by_status.values())
 
-        # Category counts
+        # Category counts — each lead goes into exactly one bucket
         inbox_ids = _inbox_lead_ids()
-        inbox_count = Lead.objects.filter(id__in=inbox_ids).count()
-        attending_count = Lead.objects.filter(status__in=ATTENDING_STATUSES).count()
-        awaiting_reply_count = total - inbox_count - attending_count
+        active_leads = Lead.objects.filter(is_archived=False)
+
+        inbox_count = active_leads.filter(id__in=inbox_ids).count()
+        attending_count = active_leads.filter(
+            status__in=ATTENDING_STATUSES
+        ).exclude(id__in=inbox_ids).count()
+        archive_count = Lead.objects.filter(is_archived=True).count()
+        awaiting_reply_count = (
+            active_leads
+            .exclude(id__in=inbox_ids)
+            .exclude(status__in=ATTENDING_STATUSES)
+            .count()
+        )
 
         pending_actions = ScheduledAction.objects.filter(status="pending").count()
 
@@ -177,6 +211,7 @@ class LeadStatsView(APIView):
                 "inbox": inbox_count,
                 "awaiting_reply": awaiting_reply_count,
                 "attending": attending_count,
+                "archive": archive_count,
             },
             "pending_scheduled_actions": pending_actions,
         })
@@ -206,6 +241,25 @@ class LeadDetailView(APIView):
             "scheduled_actions": ScheduledActionSerializer(scheduled_actions, many=True).data,
         }
         return Response(data)
+
+    def delete(self, request, lead_id):
+        """Archive a lead (soft-delete). Use PATCH with is_archived=false to unarchive."""
+        try:
+            lead = Lead.objects.get(id=lead_id)
+        except Lead.DoesNotExist:
+            return Response({"detail": "Lead not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        lead.is_archived = True
+        lead.save(update_fields=["is_archived", "updated_at"])
+
+        Event.objects.create(
+            lead_id=lead.id,
+            event_type="lead_archived",
+            source="operator",
+            description=f"Conversation archived",
+        )
+
+        return Response({"detail": "Archived", "lead_id": str(lead.id)})
 
     def patch(self, request, lead_id):
         """Update a lead's info. Logs contact changes as events."""

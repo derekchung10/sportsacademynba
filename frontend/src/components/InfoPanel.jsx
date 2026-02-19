@@ -12,10 +12,40 @@ export default function InfoPanel({ detail, nbaHistory, onClose, onRefresh }) {
   const [editingField, setEditingField] = useState(null); // 'phone' | 'email' | null
   const [editValue, setEditValue] = useState('');
   const [saving, setSaving] = useState(false);
+  const [notesText, setNotesText] = useState('');
+  const [notesDirty, setNotesDirty] = useState(false);
+  const [savingNotes, setSavingNotes] = useState(false);
+  const notesTimerRef = React.useRef(null);
+
+  const leadId = detail?.lead?.id;
+  useEffect(() => {
+    if (detail?.lead) {
+      setNotesText(detail.lead.internal_notes || '');
+      setNotesDirty(false);
+    }
+  }, [leadId]);
 
   if (!detail) return null;
 
   const { lead, current_nba, events = [], context_artifacts = [] } = detail;
+
+  const handleNotesChange = (value) => {
+    setNotesText(value);
+    setNotesDirty(true);
+    if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+    notesTimerRef.current = setTimeout(() => saveNotes(value), 1500);
+  };
+
+  const saveNotes = async (text) => {
+    setSavingNotes(true);
+    try {
+      await updateLead(lead.id, { internal_notes: text || null });
+      setNotesDirty(false);
+    } catch (e) {
+      console.error('Failed to save notes:', e);
+    }
+    setSavingNotes(false);
+  };
 
   const startEditing = (field) => {
     setEditingField(field);
@@ -54,7 +84,7 @@ export default function InfoPanel({ detail, nbaHistory, onClose, onRefresh }) {
   };
 
   return (
-    <div className="w-80 flex-shrink-0 border-l border-gray-200 bg-white flex flex-col h-full">
+    <div className="w-72 flex-shrink-0 border-l border-gray-200 bg-white flex flex-col h-full">
       {/* Header */}
       <div className="p-4 border-b border-gray-200 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-gray-900">Details</h3>
@@ -127,6 +157,27 @@ export default function InfoPanel({ detail, nbaHistory, onClose, onRefresh }) {
           </div>
         </div>
 
+        {/* Internal Notes */}
+        <CollapsibleSection
+          title="📝 Internal Notes"
+          isOpen={expandedSection === 'notes'}
+          onToggle={() => toggleSection('notes')}
+        >
+          <div className="relative">
+            <textarea
+              value={notesText}
+              onChange={(e) => handleNotesChange(e.target.value)}
+              onBlur={() => { if (notesDirty) saveNotes(notesText); }}
+              placeholder="Add private notes about this lead..."
+              rows={4}
+              className="w-full text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 resize-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none leading-relaxed"
+            />
+            <span className="absolute bottom-2.5 right-2.5 text-[9px] text-gray-300">
+              {savingNotes ? 'Saving...' : notesDirty ? 'Unsaved' : ''}
+            </span>
+          </div>
+        </CollapsibleSection>
+
         {/* NBA Recommendation */}
         <CollapsibleSection
           title="💡 Recommended Action"
@@ -140,11 +191,8 @@ export default function InfoPanel({ detail, nbaHistory, onClose, onRefresh }) {
                 <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${actionBadgeClass(current_nba.action)}`}>
                   {actionLabel(current_nba.action)}
                 </span>
-                {current_nba.channel && (
-                  <span className="text-xs text-gray-500">via {channelLabel(current_nba.channel)}</span>
-                )}
                 <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${priorityClass(current_nba.priority)}`}>
-                  {priorityLabel(current_nba.priority)} Priority
+                  {priorityLabel(current_nba.priority)}
                 </span>
               </div>
               <p className="text-xs text-gray-700 leading-relaxed break-words">{current_nba.reasoning}</p>

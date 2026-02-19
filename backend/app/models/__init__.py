@@ -6,9 +6,10 @@ from app.models.nba_decision import NBADecision
 from app.models.scheduled_action import ScheduledAction
 from app.models.q_value import QValue
 from app.models.state_transition import StateTransition
+from app.models.sms_buffer import SMSBuffer
 
 __all__ = [
     "Lead", "Interaction", "Event",
     "ContextArtifact", "NBADecision", "ScheduledAction",
-    "QValue", "StateTransition",
+    "QValue", "StateTransition", "SMSBuffer",
 ]

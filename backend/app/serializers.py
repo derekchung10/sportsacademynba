@@ -25,7 +25,8 @@ class LeadUpdateSerializer(serializers.ModelSerializer):
             'first_name', 'last_name', 'phone', 'email',
             'child_name', 'child_age', 'sport',
             'academy_name', 'campaign_goal', 'status',
-            'preferred_channel', 'tags',
+            'preferred_channel', 'tags', 'is_archived',
+            'internal_notes',
         ]
         extra_kwargs = {field: {'required': False} for field in fields}
 
@@ -108,6 +109,19 @@ class ContextArtifactSerializer(serializers.ModelSerializer):
             'id', 'lead_id', 'interaction_id', 'artifact_type',
             'content', 'version', 'is_current', 'created_at',
         ]
+
+
+# ─── Scheduled Action Serializers ────────────────────────────────────────────
+
+# ─── SMS Buffer Serializers ───────────────────────────────────────────────────
+
+class SMSMessageSerializer(serializers.Serializer):
+    """Payload to submit a single SMS message for batch extraction."""
+    lead_id = serializers.UUIDField()
+    direction = serializers.ChoiceField(choices=['inbound', 'outbound'])
+    body = serializers.CharField()
+    sender = serializers.CharField(required=False, allow_blank=True, default="")
+    received_at = serializers.DateTimeField(required=False, allow_null=True)
 
 
 # ─── Scheduled Action Serializers ────────────────────────────────────────────

@@ -1,13 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { PhoneIcon, EmailIcon, SmsIcon, SpinnerIcon } from './Icons';
-import { statusBadgeClass, statusLabel } from '../helpers';
+import { statusLabel } from '../helpers';
 import { sendSMS, makeCall, sendEmail } from '../api';
 
 /**
  * Messenger-style chat view.
  * Shows conversation thread as bubbles + message composer at bottom.
  */
-export default function ChatView({ detail, onRefresh }) {
+export default function ChatView({ detail, onRefresh, showInfoPanel, onToggleInfoPanel, onArchive }) {
   const [messageText, setMessageText] = useState('');
   const [activeChannel, setActiveChannel] = useState('sms'); // sms | email
   const [emailSubject, setEmailSubject] = useState('');
@@ -110,59 +110,57 @@ export default function ChatView({ detail, onRefresh }) {
           <div className="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-semibold flex-shrink-0">
             {lead.first_name?.[0]}{lead.last_name?.[0]}
           </div>
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-gray-900 truncate">
-              {lead.first_name} {lead.last_name}
-            </h2>
-            <p className="text-xs text-gray-500 flex items-center gap-1.5 flex-wrap">
-              {lead.child_name && <span>{lead.child_name} ·</span>}
-              {lead.sport && <span>{lead.sport}</span>}
-              <span className={`inline-flex items-center px-1.5 py-0 rounded-full text-[10px] font-medium ${statusBadgeClass(lead.status)}`}>
-                Status: {statusLabel(lead.status)}
-              </span>
-            </p>
-            <p className="text-[10px] text-gray-400 mt-0.5 truncate">
-              {lead.phone && <span>{lead.phone}</span>}
-              {lead.phone && lead.email && <span> · </span>}
-              {lead.email && <span>{lead.email}</span>}
-              {!lead.phone && !lead.email && <span className="italic">No contact info</span>}
-            </p>
-          </div>
+          <h2 className="text-sm font-semibold text-gray-900 truncate">
+            {lead.first_name} {lead.last_name}
+          </h2>
         </div>
 
-        {/* Call button */}
-        <button
-          onClick={handleCall}
-          disabled={calling}
-          className={`
-            inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all flex-shrink-0
-            ${calling
-              ? 'bg-green-100 text-green-700 cursor-wait'
-              : 'bg-green-600 text-white hover:bg-green-700 shadow-sm'
-            }
-          `}
-        >
-          {calling ? (
-            <>
-              <SpinnerIcon className="w-4 h-4" />
-              Calling...
-            </>
-          ) : (
-            <>
-              <PhoneIcon className="w-4 h-4" />
-              Call
-            </>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Call button */}
+          <button
+            onClick={handleCall}
+            disabled={calling}
+            className={`
+              inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all
+              ${calling
+                ? 'bg-green-100 text-green-700 cursor-wait'
+                : 'bg-green-600 text-white hover:bg-green-700 shadow-sm'
+              }
+            `}
+          >
+            {calling ? (
+              <>
+                <SpinnerIcon className="w-4 h-4" />
+                Calling...
+              </>
+            ) : (
+              <>
+                <PhoneIcon className="w-4 h-4" />
+                Call
+              </>
+            )}
+          </button>
+
+          {/* Toggle info panel */}
+          {onToggleInfoPanel && (
+            <button
+              onClick={onToggleInfoPanel}
+              title={showInfoPanel ? 'Hide details' : 'Show details'}
+              className={`
+                p-2 rounded-full transition-all
+                ${showInfoPanel
+                  ? 'bg-blue-100 text-blue-600 hover:bg-blue-200'
+                  : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600'
+                }
+              `}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+              </svg>
+            </button>
           )}
-        </button>
-      </div>
-
-      {/* NBA Recommendation Banner */}
-      {current_nba && (
-        <div className="px-4 py-2 bg-blue-50 border-b border-blue-100 flex items-center gap-2 min-w-0 overflow-hidden">
-          <span className="text-blue-600 text-xs font-semibold flex-shrink-0">💡 Suggested:</span>
-          <span className="text-xs text-blue-800 truncate min-w-0">{current_nba.reasoning}</span>
         </div>
-      )}
+      </div>
 
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1 bg-gray-50">
@@ -227,7 +225,7 @@ export default function ChatView({ detail, onRefresh }) {
                     ${interaction.channel === 'voice' ? 'bg-blue-100 text-blue-600' : 'bg-purple-100 text-purple-600'}
                   `}>
                     {interaction.channel === 'voice' ? (
-                      <><PhoneIcon className="w-3 h-3" /> Phone Call {interaction.status === 'no_answer' ? '· No Answer' : `· ${interaction.duration_seconds || 0}s`}</>
+                      <><PhoneIcon className="w-3 h-3" /> {interaction.direction === 'inbound' ? 'Incoming' : 'Outgoing'} Call {interaction.status === 'no_answer' ? '· No Answer' : interaction.status === 'voicemail' ? '· Voicemail' : `· ${interaction.duration_seconds || 0}s`}</>
                     ) : (
                       <><EmailIcon className="w-3 h-3" /> Email</>
                     )}
@@ -249,7 +247,6 @@ export default function ChatView({ detail, onRefresh }) {
                         : 'bg-white border border-gray-200 text-gray-900 rounded-bl-md'
                     }
                   `}>
-                    {/* Voice calls show as transcript card */}
                     {interaction.channel === 'voice' ? (
                       <div className="space-y-1.5">
                         <pre className="text-xs whitespace-pre-wrap font-sans leading-relaxed">{interaction.transcript}</pre>
@@ -264,7 +261,6 @@ export default function ChatView({ detail, onRefresh }) {
                       <p className="whitespace-pre-wrap">{interaction.transcript}</p>
                     )}
 
-                    {/* Sentiment/intent indicator for inbound */}
                     {!isOutbound && interaction.detected_intent && interaction.detected_intent !== 'unclear' && (
                       <div className="mt-1.5 flex items-center gap-1.5">
                         <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${sentimentBadge(interaction.sentiment)}`}>
@@ -282,8 +278,36 @@ export default function ChatView({ detail, onRefresh }) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Composer */}
+      {/* NBA Suggestion + Composer */}
       <div className="border-t border-gray-200 bg-white">
+        {/* NBA Recommendation Banner */}
+        {current_nba && (
+          <div className={`flex items-start gap-2 px-3 pt-2.5 pb-1.5 ${
+            current_nba.action === 'stop' ? 'text-red-700' : 'text-blue-700'
+          }`}>
+            <span className="text-sm flex-shrink-0 mt-px">{current_nba.action === 'stop' ? '🛑' : '💡'}</span>
+            <div className="min-w-0 flex-1">
+              <p className={`text-xs leading-relaxed ${
+                current_nba.action === 'stop' ? 'text-red-700' : 'text-blue-700'
+              }`}>
+                {current_nba.reasoning}
+              </p>
+              {current_nba.action === 'stop' && onArchive && lead && (
+                <div className="mt-1.5">
+                  <button
+                    onClick={() => onArchive(lead.id)}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m20.25 7.5-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0-3-3m3 3 3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z" />
+                    </svg>
+                    Archive
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         {/* Channel tabs */}
         <div className="flex items-center gap-1 px-3 pt-2">
           <button
@@ -402,3 +426,4 @@ function sentimentBadge(sentiment) {
   };
   return map[sentiment] || 'bg-gray-100 text-gray-600';
 }
+

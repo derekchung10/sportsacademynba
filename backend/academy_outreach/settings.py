@@ -23,6 +23,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'corsheaders',
+    'django_q',
     'app',
 ]
 
@@ -78,8 +79,10 @@ STATICFILES_DIRS = [FRONTEND_DIST_DIR]
 CORS_ALLOW_ALL_ORIGINS = DEBUG
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',
+    'http://localhost:5174',
     'http://localhost:3000',
     'http://127.0.0.1:5173',
+    'http://127.0.0.1:5174',
 ]
 
 # DRF
@@ -105,6 +108,22 @@ OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
 MAX_ATTEMPTS_PER_CHANNEL = int(os.environ.get('MAX_ATTEMPTS_PER_CHANNEL', '3'))
 COOLDOWN_HOURS_AFTER_NO_RESPONSE = int(os.environ.get('COOLDOWN_HOURS_AFTER_NO_RESPONSE', '24'))
 ESCALATION_AFTER_FAILED_ATTEMPTS = int(os.environ.get('ESCALATION_AFTER_FAILED_ATTEMPTS', '5'))
+
+# django-q2 — lightweight task queue using the ORM broker (no Redis needed)
+Q_CLUSTER = {
+    'name': 'academy-outreach',
+    'workers': 2,
+    'timeout': 120,
+    'retry': 180,
+    'orm': 'default',
+    'bulk': 10,
+    'catch_up': True,
+}
+
+# SMS batch extraction timing
+SMS_QUIET_PERIOD_MINUTES = int(os.environ.get('SMS_QUIET_PERIOD_MINUTES', '5'))
+SMS_MAX_ACCUMULATION_MINUTES = int(os.environ.get('SMS_MAX_ACCUMULATION_MINUTES', '15'))
+SMS_MAX_BUFFERED_MESSAGES = int(os.environ.get('SMS_MAX_BUFFERED_MESSAGES', '6'))
 
 # All datetimes are timezone-aware UTC (Django best practice)
 USE_TZ = True

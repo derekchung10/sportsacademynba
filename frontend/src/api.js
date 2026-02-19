@@ -42,6 +42,24 @@ export async function updateLead(leadId, data) {
   return res.json();
 }
 
+// ─── Archive ─────────────────────────────────────────────────────────────────
+
+export async function archiveLead(leadId) {
+  const res = await fetch(`${API_BASE}/leads/${leadId}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to archive lead');
+  return res.json();
+}
+
+export async function unarchiveLead(leadId) {
+  const res = await fetch(`${API_BASE}/leads/${leadId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_archived: false }),
+  });
+  if (!res.ok) throw new Error('Failed to unarchive lead');
+  return res.json();
+}
+
 // ─── Communication APIs ──────────────────────────────────────────────────────
 
 export async function sendSMS(leadId, message) {

@@ -319,15 +319,92 @@ def _determine_channel(semantic_action: str, inputs) -> str:
     return base_channel
 
 
-def _determine_priority(q_value: float, semantic_action: str) -> str:
-    """Derive priority from the Q-value magnitude and action type."""
-    if semantic_action in ("scheduling_push",) and q_value > 0.3:
-        return "urgent"
+def _determine_priority(q_value: float, semantic_action: str, inputs=None) -> str:
+    """
+    Derive priority from context signals, action type, and Q-value.
+    Context-based heuristics ensure meaningful priorities even with
+    fresh Q-tables (where all values start near zero).
+    """
+    # Urgent: scheduling intent is hot, or Q-value is very high
+    if semantic_action == "scheduling_push":
+        return "high"
     if q_value > 0.5:
         return "high"
+
+    # High: at-risk retention, objection handling, win-back
+    if semantic_action in ("objection_address", "retention_check_in", "channel_switch"):
+        return "high"
+    if inputs and getattr(inputs, "lead_status", "") in ("at_risk",):
+        return "high"
+
+    # Normal: active engagement, financial outreach, welcome
+    if semantic_action in ("warm_follow_up", "scholarship_outreach", "welcome_onboard", "family_engage"):
+        return "normal"
+    if inputs and getattr(inputs, "lead_status", "") in ("interested", "trial", "enrolled"):
+        return "normal"
     if q_value > 0.2:
         return "normal"
+
+    # Low: gentle nudges, stop, wait, or new leads with no urgency
     return "low"
+
+
+def _contextualize_rationale(brief: ActionBrief, inputs) -> None:
+    """
+    Replace the generic timing_rationale with a sentence informed by the
+    lead's actual context: child info, scheduling constraints, response
+    timestamps, and conversation history.
+    """
+    action = brief.semantic_action
+    if action in ("wait", "stop"):
+        return
+
+    child = getattr(inputs, "_lead_child_name", None) or "their child"
+    sport = getattr(inputs, "_lead_sport", None) or ""
+    name = getattr(inputs, "_lead_first_name", "them")
+    timing = getattr(inputs, "_response_timing", {})
+    time_hint = timing.get("time_hint")
+    channel = brief.channel
+
+    # Channel verb that reads naturally in a sentence
+    ch = {"voice": "call", "sms": "text", "email": "email"}.get(channel, "reach out to")
+
+    # Build the core suggestion with the medium woven in
+    core = {
+        "scheduling_push": f"{ch.capitalize()} {name} now while they're ready to schedule",
+        "warm_follow_up": f"{ch.capitalize()} {name} to keep the conversation going",
+        "gentle_nudge": f"{ch.capitalize()} {name} with a light check-in",
+        "scholarship_outreach": f"{ch.capitalize()} {name} with financial aid details they can review at their own pace",
+        "info_send": f"{ch.capitalize()} {name} with the information they asked about",
+        "objection_address": f"{ch.capitalize()} {name} to address {', '.join(inputs.objection_topics) if inputs.objection_topics else 'their concerns'}",
+        "welcome_onboard": f"{ch.capitalize()} {name} with a welcome message and first-day details for {child}",
+        "retention_check_in": f"{ch.capitalize()} {name} to check in on how {child} is doing",
+        "family_engage": f"{ch.capitalize()} {name} when the whole family can talk",
+        "channel_switch": f"Try a {ch} instead — previous channel hasn't connected with {name}",
+    }.get(action, f"{ch.capitalize()} {name}")
+
+    extras = []
+
+    # Timing from actual response patterns
+    if time_hint:
+        extras.append(f"they tend to respond {time_hint}")
+
+    # Context clues
+    if inputs.has_scheduling_constraints:
+        extras.append("mention the alternative schedule options")
+    if inputs.has_pending_decision_makers:
+        extras.append("include info they can share with the other decision-maker")
+    if inputs.financial_concern_level in ("moderate", "high") and action != "scholarship_outreach":
+        extras.append("be prepared to discuss financial options")
+
+    # Sport/child personalization
+    if sport and action in ("warm_follow_up", "retention_check_in", "scheduling_push", "welcome_onboard"):
+        extras.append(f"reference {child}'s {sport}")
+
+    if extras:
+        brief.timing_rationale = f"{core} — {', '.join(extras)}."
+    else:
+        brief.timing_rationale = f"{core}."
 
 
 def _generate_message_draft(brief: ActionBrief, inputs) -> str | None:
@@ -376,7 +453,7 @@ def build_action_brief(
 
     channel = _determine_channel(semantic_action, inputs)
     timing_hours = template["base_timing_hours"]
-    priority = _determine_priority(q_value, semantic_action)
+    priority = _determine_priority(q_value, semantic_action, inputs)
 
     brief = ActionBrief(
         semantic_action=semantic_action,
@@ -396,6 +473,9 @@ def build_action_brief(
 
     # Enrich with lead-specific context
     _enrich_with_context(brief, inputs)
+
+    # Generate contextual rationale (replaces generic template text)
+    _contextualize_rationale(brief, inputs)
 
     # Sort directives by priority
     brief.content_directives.sort(key=lambda d: d.get("priority", 99))

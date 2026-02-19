@@ -85,3 +85,4 @@ export default function InteractionsTab({ interactions }) {
     </div>
   );
 }
+

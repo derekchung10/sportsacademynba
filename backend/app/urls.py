@@ -12,6 +12,7 @@ urlpatterns = [
 
     # Interactions
     path('interactions/', interactions.InteractionSubmitView.as_view()),
+    path('interactions/sms', interactions.SMSMessageView.as_view()),
     path('interactions/<uuid:interaction_id>', interactions.InteractionDetailView.as_view()),
 
     # Communication (operator-initiated outreach)
